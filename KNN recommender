@@ -1,0 +1,178 @@
+import requests
+import pandas as pd
+import numpy as np
+from bs4 import BeautifulSoup
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.neighbors import NearestNeighbors
+import time
+
+# ==========================================
+# PART 1: SHOPIFY SCRAPER
+# ==========================================
+
+class ShopifyScraper:
+    def __init__(self, base_url):
+        self.base_url = base_url.rstrip('/')
+        self.products = []
+
+    def fetch_products(self, limit=250):
+        """
+        Fetches products from the hidden /products.json endpoint available 
+        on most Shopify sites.
+        """
+        page = 1
+        print(f"--- Starting scrape for {self.base_url} ---")
+        
+        while True:
+            # Shopify usually exposes data at /products.json
+            url = https://www.flipkart.com/clothing-and-accessories/shoppy-unlimited~brand/pr?sid=clo"
+            try:
+                response = requests.get(url, timeout=10)
+                if response.status_code != 200:
+                    print(f"Failed to fetch page {page}. Status: {response.status_code}")
+                    break
+                
+                data = response.json()
+                fetched_products = data.get('products', [])
+                
+                if not fetched_products:
+                    print("No more products found.")
+                    break
+                
+                for p in fetched_products:
+                    # Extract only relevant fields for recommendation
+                    clean_desc = self._clean_html(p.get('body_html', ''))
+                    
+                    self.products.append({
+                        'id': p.get('id'),
+                        'title': p.get('title'),
+                        'tags': ", ".join(p.get('tags', [])),
+                        'product_type': p.get('product_type'),
+                        'description': clean_desc,
+                        'handle': p.get('handle') # Useful for creating links later
+                    })
+                
+                print(f"Fetched page {page}: {len(fetched_products)} products.")
+                page += 1
+                time.sleep(1) # Be polite to the server
+                
+            except Exception as e:
+                print(f"Error occurred: {e}")
+                break
+                
+        return pd.DataFrame(self.products)
+
+    def _clean_html(self, raw_html):
+        """Removes HTML tags from product descriptions using BeautifulSoup."""
+        if not raw_html:
+            return ""
+        soup = BeautifulSoup(raw_html, "html.parser")
+        return soup.get_text(separator=" ").strip()
+
+# ==========================================
+# PART 2: RECOMMENDATION ENGINE (KNN)
+# ==========================================
+
+class ContentRecommender:
+    def __init__(self, data):
+        self.df = data
+        self.vectorizer = None
+        self.model = None
+        self.vectors = None
+
+    def prepare_data(self):
+        """
+        Combines relevant text features into a single string for vectorization.
+        """
+        print("--- Preprocessing Data ---")
+        # Combine Title, Tags, Type, and Description into one 'soup' of text
+        self.df['combined_features'] = (
+            self.df['title'].fillna('') + " " +
+            self.df['tags'].fillna('') + " " +
+            self.df['product_type'].fillna('') + " " +
+            self.df['description'].fillna('')
+        )
+        print("Data preprocessed successfully.")
+
+    def build_model(self):
+        """
+        Vectorizes the text data and fits the KNN model.
+        """
+        print("--- Building Vectorizer and KNN Model ---")
+        
+        # 1. Vectorization (TF-IDF)
+        # stop_words='english' removes common words like 'the', 'a', etc.
+        self.vectorizer = TfidfVectorizer(stop_words='english', max_features=5000)
+        self.vectors = self.vectorizer.fit_transform(self.df['combined_features'])
+        
+        # 2. KNN Model
+        # Metric 'cosine' is standard for text similarity
+        # brute force is often faster for sparse matrices in smaller datasets
+        self.model = NearestNeighbors(n_neighbors=6, algorithm='brute', metric='cosine')
+        self.model.fit(self.vectors)
+        print("Model trained successfully.")
+
+    def recommend(self, product_title):
+        """
+        Finds similar products based on a given product title.
+        """
+        # Find the index of the product in the dataframe
+        product_idx = self.df.index[self.df['title'] == product_title].tolist()
+        
+        if not product_idx:
+            return f"Product '{product_title}' not found in database."
+        
+        product_idx = product_idx[0]
+        
+        # Get the vector for this product
+        query_vector = self.vectors[product_idx]
+        
+        # Find nearest neighbors
+        # Returns distances and indices of the neighbors
+        distances, indices = self.model.kneighbors(query_vector)
+        
+        print(f"\nRecommended for: {product_title}")
+        print("-" * 40)
+        
+        # Skip the first result because it is the product itself (distance 0)
+        for i in range(1, len(distances.flatten())):
+            index = indices.flatten()[i]
+            distance = distances.flatten()[i]
+            similarity_score = 1 - distance # Cosine distance to similarity
+            
+            rec_title = self.df.iloc[index]['title']
+            rec_handle = self.df.iloc[index]['handle']
+            
+            print(f"{i}. {rec_title} (Similarity: {similarity_score:.2f})")
+            print(f"   Link: .../products/{rec_handle}\n")
+
+# ==========================================
+# PART 3: EXECUTION
+# ==========================================
+
+if __name__ == "__main__":
+    # 1. URL of the Shopify store to scrape
+    # REPLACE THIS with a real shopify store URL (e.g., https://colourpop.com, https://gymshark.com)
+    # Note: Some stores disable the .json endpoint.
+    TARGET_URL = "https://uk.gymshark.com" 
+
+    # 2. Run Scraper
+    scraper = ShopifyScraper(TARGET_URL)
+    df_products = scraper.fetch_products(limit=50) # Limit 50 per page for demo speed
+
+    if not df_products.empty:
+        # Save to CSV (optional backup)
+        df_products.to_csv("shopify_products.csv", index=False)
+        
+        # 3. Initialize Recommender
+        recommender = ContentRecommender(df_products)
+        recommender.prepare_data()
+        recommender.build_model()
+        
+        # 4. Get Recommendations
+        # Pick a random product from the scraped list to test
+        random_product = df_products.iloc[0]['title']
+        recommender.recommend(random_product)
+        
+    else:
+        print("No data scraped. Please check the URL or try a different Shopify store.")
