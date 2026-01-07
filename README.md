@@ -23,7 +23,7 @@ An end-to-end Python project that scrapes product data from public Shopify store
 
 1.  **Clone the repository**
     ```bash
-    git clone [https://github.com/chanuu123/Selenium-Mini-project.git]
+    git clone [https://github.com/chanuu123/Selenium-data-scrapping-and-Product-Recommendation.git]
     cd shopify-recommender
     ```
 
